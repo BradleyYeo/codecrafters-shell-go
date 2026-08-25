@@ -1,14 +1,14 @@
 package main
 
 import (
-	"fmt"
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 )
 
 const (
-	promptSymbol = "$ "
+	promptSymbol   = "$ "
 	cmdNotFoundFmt = "%s: command not found\n"
 )
 
@@ -17,27 +17,33 @@ const (
 func execCommand(command string) {
 	if command == "" {
 		return
-	} else if (command == "exit") {
-		os.Exit(0)
-	} else if (strings.HasPrefix(command, "echo")) {
-		args := os.Args[1:]
-		output := strings.Join(args, " ")
-		fmt.Println(output)
 	}
-	fmt.Printf(cmdNotFoundFmt, command)
+
+	parts := strings.Split(command, " ")
+	cmdName := parts[0]
+	args := parts[1:]
+
+	switch cmdName {
+	case "exit":
+		os.Exit(0)
+	case "echo":
+		fmt.Println(strings.Join(args, " "))
+	default:
+		fmt.Printf(cmdNotFoundFmt, command)
+	}
 }
 
 func main() {
 	// Initialize reader once on fd 0 to preserve buffered stream state.
 	reader := bufio.NewReader(os.Stdin)
 	for {
-	fmt.Printf(promptSymbol)
+		fmt.Printf(promptSymbol)
 
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return
-	}
-	command := strings.TrimSpace(input)
-	execCommand(command)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		command := strings.TrimSpace(input)
+		execCommand(command)
 	}
 }
