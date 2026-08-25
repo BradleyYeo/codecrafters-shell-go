@@ -71,6 +71,23 @@ func evalType(command string) {
 	fmt.Printf(typeNotFoundFmt, command)
 }
 
+// runExternal executes external binaries by forwarding standard streams.
+// Input: structured command with binary name and arguments.
+// Output: None (writes directly to OS streams).
+func runExternal(cmd command) {
+	if _, ok := findExecutable(cmd.name); !ok {
+		fmt.Printf(cmdNotFoundFmt, cmd.name)
+		return
+	}
+
+	proc := exec.Command(cmd.name, cmd.args...)
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+	proc.Stdin = os.Stdin
+
+	_ = proc.Run()
+}
+
 // evalCommand executes a parsed command against builtins or external tools.
 // Input: structured command.
 // Output: boolean indicating whether the shell REPL should continue running.
@@ -91,8 +108,9 @@ func evalCommand(cmd command) bool {
 		}
 		return true
 	default:
-		fmt.Printf(cmdNotFoundFmt, cmd.name)
+		runExternal(cmd)
 		return true
+
 	}
 }
 
