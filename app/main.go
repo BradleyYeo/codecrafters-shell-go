@@ -8,11 +8,13 @@ import (
 )
 
 const (
-	promptSymbol   = "$ "
-	cmdNotFoundFmt = "%s: command not found\n"
+	promptSymbol    = "$ "
+	cmdNotFoundFmt  = "%s: command not found\n"
+	typeBuiltinFmt  = "%s is a shell builtin\n"
+	typeNotFoundFmt = "%s: not found\n"
 )
 
-// Command is a parsed shell invocation
+// command represents a parsed shell invocation.
 type command struct {
 	name string
 	args []string
@@ -33,6 +35,24 @@ func parseCommandLine(line string) command {
 	}
 }
 
+var builtins = map[string]struct{}{
+	"echo": {},
+	"exit": {},
+	"type": {},
+}
+
+// evalType inspects whether a target command is a shell builtin.
+// Input: target command name (e.g. "echo").
+// Output: None (writes directly to stdout).
+func evalType(target string) {
+	if _, ok := builtins[target]; ok {
+		fmt.Printf(typeBuiltinFmt, target)
+		return
+	}
+
+	fmt.Printf(typeNotFoundFmt, target)
+}
+
 // evalCommand executes a parsed command against builtins or external tools.
 // Input: structured command.
 // Output: boolean indicating whether the shell REPL should continue running.
@@ -46,6 +66,11 @@ func evalCommand(cmd command) bool {
 		return false
 	case "echo":
 		fmt.Println(strings.Join(cmd.args, " "))
+		return true
+	case "type":
+		if len(cmd.args) > 0 {
+			evalType(cmd.args[0])
+		}
 		return true
 	default:
 		fmt.Printf(cmdNotFoundFmt, cmd.name)
