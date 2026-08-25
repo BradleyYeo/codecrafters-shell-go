@@ -44,13 +44,13 @@ var builtins = map[string]struct{}{
 // evalType inspects whether a target command is a shell builtin.
 // Input: target command name (e.g. "echo").
 // Output: None (writes directly to stdout).
-func evalType(target string) {
-	if _, ok := builtins[target]; ok {
-		fmt.Printf(typeBuiltinFmt, target)
+func evalType(command string) {
+	if _, ok := builtins[command]; ok {
+		fmt.Printf(typeBuiltinFmt, command)
 		return
 	}
 
-	fmt.Printf(typeNotFoundFmt, target)
+	fmt.Printf(typeNotFoundFmt, command)
 }
 
 // evalCommand executes a parsed command against builtins or external tools.
