@@ -12,24 +12,44 @@ const (
 	cmdNotFoundFmt = "%s: command not found\n"
 )
 
-// Input: trimmed command string (e.g., "echo hello").
-// Output: None (writes directly to stdout/stderr). Exit with code 0 if fail
-func execCommand(command string) {
-	if command == "" {
-		return
+// Command is a parsed shell invocation
+type command struct {
+	name string
+	args []string
+}
+
+// parseCommandLine tokenizes a raw input line into a structured command.
+// Input: raw string from stdin (e.g., "echo foo bar").
+// Output: command struct containing the binary/builtin name and arguments.
+func parseCommandLine(line string) command {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return command{}
 	}
 
-	parts := strings.Split(command, " ")
-	cmdName := parts[0]
-	args := parts[1:]
+	return command{
+		name: parts[0],
+		args: parts[1:],
+	}
+}
 
-	switch cmdName {
+// evalCommand executes a parsed command against builtins or external tools.
+// Input: structured command.
+// Output: boolean indicating whether the shell REPL should continue running.
+func evalCommand(cmd command) bool {
+	if cmd.name == "" {
+		return true
+	}
+
+	switch cmd.name {
 	case "exit":
-		os.Exit(0)
+		return false
 	case "echo":
-		fmt.Println(strings.Join(args, " "))
+		fmt.Println(strings.Join(cmd.args, " "))
+		return true
 	default:
-		fmt.Printf(cmdNotFoundFmt, command)
+		fmt.Printf(cmdNotFoundFmt, cmd.name)
+		return true
 	}
 }
 
@@ -43,7 +63,10 @@ func main() {
 		if err != nil {
 			return
 		}
-		command := strings.TrimSpace(input)
-		execCommand(command)
+		cmd := parseCommandLine(strings.TrimSpace(input))
+		shouldContinue := evalCommand(cmd)
+		if !shouldContinue {
+			break
+		}
 	}
 }
