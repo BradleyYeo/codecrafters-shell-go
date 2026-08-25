@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ const (
 	promptSymbol    = "$ "
 	cmdNotFoundFmt  = "%s: command not found\n"
 	typeBuiltinFmt  = "%s is a shell builtin\n"
+	typeExecFmt     = "%s is %s\n"
 	typeNotFoundFmt = "%s: not found\n"
 )
 
@@ -35,6 +37,17 @@ func parseCommandLine(line string) command {
 	}
 }
 
+// findExecutable searches the PATH environment variable for a binary.
+// Input: binary name (e.g. "ls", "grep").
+// Output: absolute path if found, and a boolean indicating success.
+func findExecutable(name string) (string, bool) {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "", false
+	}
+	return path, true
+}
+
 var builtins = map[string]struct{}{
 	"echo": {},
 	"exit": {},
@@ -47,6 +60,11 @@ var builtins = map[string]struct{}{
 func evalType(command string) {
 	if _, ok := builtins[command]; ok {
 		fmt.Printf(typeBuiltinFmt, command)
+		return
+	}
+
+	if path, ok := findExecutable(command); ok {
+		fmt.Printf(typeExecFmt, command, path)
 		return
 	}
 
