@@ -64,7 +64,7 @@ func builtinType(cmd command, ctx shellContext) flowAction {
 	}
 
 	target := cmd.args[0]
-	if _, ok := builtins[target]; ok {
+	if ctx.isBuiltin(target) {
 		fmt.Fprintf(ctx.stdout, typeBuiltinFmt, target)
 		return actionContinue
 	}
@@ -76,17 +76,6 @@ func builtinType(cmd command, ctx shellContext) flowAction {
 
 	fmt.Fprintf(ctx.stdout, typeNotFoundFmt, target)
 	return actionContinue
-}
-
-// builtins acts as the single source of truth for builtin lookup and execution.
-var builtins map[string]builtinHandler
-
-func init() {
-	builtins = map[string]builtinHandler{
-		"echo": builtinEcho,
-		"exit": builtinExit,
-		"type": builtinType,
-	}
 }
 
 // runExternal executes external binaries by forwarding configured streams.
@@ -114,7 +103,7 @@ func evalCommand(cmd command, ctx shellContext) flowAction {
 		return actionContinue
 	}
 
-	if handler, ok := builtins[cmd.name]; ok {
+	if handler, ok := ctx.builtins[cmd.name]; ok {
 		return handler(cmd, ctx)
 	}
 
@@ -143,11 +132,19 @@ func parseCommandLine(line string) command {
 	}
 }
 
+// isBuiltin checks if a command name exists within the injected registry.
+func (ctx shellContext) isBuiltin(name string) bool {
+	_, ok := ctx.builtins[name]
+	return ok
+}
+
 // shellContext encapsulates I/O streams to avoid global state dependencies.
 type shellContext struct {
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
+	// builtins acts as the single source of truth for builtin lookup and execution.
+	builtins map[string]builtinHandler
 }
 
 func main() {
@@ -155,6 +152,11 @@ func main() {
 		stdin:  os.Stdin,
 		stdout: os.Stdout,
 		stderr: os.Stderr,
+		builtins: map[string]builtinHandler{
+			"echo": builtinEcho,
+			"exit": builtinExit,
+			"type": builtinType,
+		},
 	}
 
 	// Initialize reader once on fd 0 (Standard Input) to preserve buffered stream state (bytes already read from the underlying OS file descriptor via the read syscall).
