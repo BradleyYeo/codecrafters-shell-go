@@ -19,6 +19,10 @@ func execCommand(command string) {
 		return
 	} else if (command == "exit") {
 		os.Exit(0)
+	} else if (strings.HasPrefix(command, "echo")) {
+		args := os.Args[1:]
+		output := strings.Join(args, " ")
+		fmt.Println(output)
 	}
 	fmt.Printf(cmdNotFoundFmt, command)
 }
