@@ -13,12 +13,14 @@ const (
 )
 
 // Input: trimmed command string (e.g., "echo hello").
-// Output: None (writes directly to stdout/stderr).
-func execCommand(input string) {
-	if len(input) == 0 {
+// Output: None (writes directly to stdout/stderr). Exit with code 0 if fail
+func execCommand(command string) {
+	if command == "" {
 		return
+	} else if (command == "exit") {
+		os.Exit(0)
 	}
-	fmt.Printf(cmdNotFoundFmt, input)
+	fmt.Printf(cmdNotFoundFmt, command)
 }
 
 func main() {
