@@ -2,10 +2,10 @@
 
 ## Program Entry Point & Execution Trace
 - Execution begins at `func main()` in `package main`.
-- The REPL creates a `shellContext` with standard streams (`os.Stdin`, `os.Stdout`, `os.Stderr`).
+- The REPL initializes a `shellContext` holding standard streams (`os.Stdin`, `os.Stdout`, `os.Stderr`) and the `builtins` dispatch table.
 - A `bufio.Reader` reads user input line-by-line in an infinite `for` loop.
 - `parseCommandLine` tokenizes the input into a `command` struct containing `name` and `args`.
-- `evalCommand` checks the `builtins` map for a matching handler function.
+- `evalCommand` checks `ctx.builtins` for a matching handler function.
 - If found, it executes the builtin handler (`builtinEcho`, `builtinExit`, `builtinType`).
 - If not found, `runExternal` searches `$PATH` via `findExecutable` and launches a child process via `os/exec`.
 - The returned `flowAction` determines whether the loop continues or breaks on `actionExit`.
@@ -21,16 +21,15 @@
 - `type flowAction int` + `iota`: Go's idiomatic pattern for auto-incrementing integer enumerations (`actionContinue = 0`, `actionExit = 1`).
 
 ### Structs and Slices
-- `struct`: Composite data types grouping fields (`shellContext` groups I/O streams; `command` groups `name` and `args`).
+- `struct`: Composite data types grouping fields (`command` groups `name` and `args`; `shellContext` groups I/O streams and the registry).
 - `[]string`: Dynamically sized, contiguous array view (slice) used to store arbitrary argument lists.
 
 ### First-Class Functions & Function Types
 - `type builtinHandler func(cmd command, ctx shellContext) flowAction`: Treats functions as first-class values.
 - Allows storing handler functions directly inside map values for table-driven dispatch.
 
-### Hash Maps and Initialization Lifecycle
-- `map[string]builtinHandler`: Key-value lookup table providing O(1) command routing.
-- `func init()`: Special runtime lifecycle hook executed before `main()` that safely populates the `builtins` registry without initialization cycles.
+### Methods on Structs
+- `func (ctx shellContext) isBuiltin(name string) bool`: A method with a value receiver attached to `shellContext`, encapsulating membership checks.
 
 ### Explicit I/O Writing
 - `fmt.Fprint` and `fmt.Fprintf`: Directs formatted output to any target implementing the `io.Writer` interface (`ctx.stdout`) rather than hardcoding global terminal output.
@@ -42,7 +41,7 @@
 ```text
 +-------------------------------------------------------------------+
 |                            REPL Loop                              |
-|   - Holds shellContext (stdin, stdout, stderr)                    |
+|   - Holds shellContext (stdin, stdout, stderr, builtins)          |
 |   - Prompts user ('$ ') to stdout                                 |
 |   - Reads input stream from stdin (bufio.Reader)                  |
 +---------------------------------+---------------------------------+
@@ -56,25 +55,25 @@
                                   v
 +-------------------------------------------------------------------+
 |                    Command Evaluator (Policy)                     |
-|   - Queries builtins table registry                               |
+|   - Queries ctx.builtins registry                                 |
 |   - Routes to builtinHandler or fallback OS driver                |
 +---------------------------------+---------------------------------+
                   |                               |
                   v                               v
 +---------------------------------+ +-------------------------------+
 |     Builtins Table (Registry)   | |      OS Exec Driver           |
-|   - map[string]builtinHandler   | |   - exec.LookPath             |
-|   - Single Source of Truth      | |   - exec.Command              |
+|   - ctx.builtins map            | |   - exec.LookPath             |
+|   - ctx.isBuiltin() helper      | |   - exec.Command              |
 |   - echo, exit, type handlers   | |   - Stream plumbing to ctx    |
 +---------------------------------+ +-------------------------------+
 ```
 
 ## Concept Boundaries
 - REPL: Controls process lifecycle, prompt display, and unbuffered/buffered stream consumption.
-- Context Layer: Injects stream dependencies (`stdin`, `stdout`, `stderr`) eliminating global OS state coupling.
+- Context Layer: Injects stream dependencies (`stdin`, `stdout`, `stderr`) and the dispatch table (`builtins`), eliminating global state.
 - Parser: Converts unstructured text into intermediate representation (`command` struct).
 - Evaluator (Policy): Orchestrates routing decisions without performing execution mechanics.
-- Builtin Registry: Unified table mapping command identifiers to handler implementations.
+- Builtin Registry: Injected table mapping command identifiers to handler implementations.
 - OS Exec Driver (Mechanism): Interfaces with Linux kernel syscalls (`fork`/`execve`, stream binding).
 
 # Operating System Concepts
@@ -102,19 +101,21 @@
 
 ## Single Source of Truth & Table-Driven Dispatch
 - Duplicated registrations cause Shotgun Surgery: adding a builtin previously required changing both a lookup set and a dispatch switch block.
-- Unifying registration and execution into `map[string]builtinHandler` provides a single authoritative registry for both `type` queries and runtime evaluation.
+- Injected `builtins` registry provides a single authoritative mapping for both `type` queries (`ctx.isBuiltin`) and runtime evaluation (`ctx.builtins[cmd.name]`).
 
 ```go
 type builtinHandler func(cmd command, ctx shellContext) flowAction
 
-var builtins map[string]builtinHandler
+type shellContext struct {
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+	builtins map[string]builtinHandler
+}
 
-func init() {
-	builtins = map[string]builtinHandler{
-		"echo": builtinEcho,
-		"exit": builtinExit,
-		"type": builtinType,
-	}
+func (ctx shellContext) isBuiltin(name string) bool {
+	_, ok := ctx.builtins[name]
+	return ok
 }
 ```
 
@@ -131,15 +132,23 @@ const (
 )
 ```
 
-## Dependency Injection & I/O Boundary Isolation
-- Hardcoding `os.Stdout`, `os.Stderr`, and `os.Stdin` creates global state coupling and prevents isolated unit testing.
-- Encapsulating streams in `shellContext` allows handlers and drivers to operate against abstract `io.Reader` and `io.Writer` interfaces.
+## Dependency Injection & Zero Global State
+- Hardcoding `os.Stdout`, `os.Stderr`, and package-level `var builtins` creates global state coupling and circular initialization dependencies.
+- Injecting all dependencies through `shellContext` enables headless testing and deterministic execution.
 
 ```go
-type shellContext struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
+func main() {
+	ctx := shellContext{
+		stdin:  os.Stdin,
+		stdout: os.Stdout,
+		stderr: os.Stderr,
+		builtins: map[string]builtinHandler{
+			"echo": builtinEcho,
+			"exit": builtinExit,
+			"type": builtinType,
+		},
+	}
+    // ...
 }
 ```
 
@@ -153,7 +162,7 @@ func evalCommand(cmd command, ctx shellContext) flowAction {
 		return actionContinue
 	}
 
-	if handler, ok := builtins[cmd.name]; ok {
+	if handler, ok := ctx.builtins[cmd.name]; ok {
 		return handler(cmd, ctx)
 	}
 
@@ -162,16 +171,53 @@ func evalCommand(cmd command, ctx shellContext) flowAction {
 }
 ```
 
-# Additional Design Principles
+# John Ousterhout Software Design Principles
 
-## Daniel Jackson Concept Design
-- Orthogonal Concepts: Tokenization, routing policy, binary resolution, and process execution are decoupled into independent concepts.
-- Intermediate Representation (IR): The `command` struct acts as the single contract between parser and evaluator, preventing parsing details from leaking into execution.
+## Information Hiding vs Information Leakage
+- `builtinType` queries `ctx.isBuiltin(target)` without knowing whether the registry is stored in a map, slice, or database.
+- Eliminates circular package initialization dependencies by eliminating package-level global registries.
 
-## John Ousterhout Philosophy of Software Design
-- Deep Interfaces: `findExecutable` and `parseCommandLine` hide parsing and path traversal complexity behind simple signatures.
-- Defining Errors Out of Existence: Empty input returns a zero-value `command{}` that evaluates safely without error handling branches.
-- Information Hiding: `evalCommand` coordinates execution without knowing the internal mechanics of `os/exec` or path parsing.
+```go
+func builtinType(cmd command, ctx shellContext) flowAction {
+	if len(cmd.args) == 0 {
+		return actionContinue
+	}
+
+	target := cmd.args[0]
+	if ctx.isBuiltin(target) {
+		fmt.Fprintf(ctx.stdout, typeBuiltinFmt, target)
+		return actionContinue
+	}
+
+	if path, ok := findExecutable(target); ok {
+		fmt.Fprintf(ctx.stdout, typeExecFmt, target, path)
+		return actionContinue
+	}
+
+	fmt.Fprintf(ctx.stdout, typeNotFoundFmt, target)
+	return actionContinue
+}
+```
+
+## Deep Interfaces and Encapsulation
+- `findExecutable`: Compact signature `(string) -> (string, bool)` completely hides `$PATH` parsing and permissions checks.
+- `runExternal`: Pulls down child process spawning, stream assignment, and execution error handling.
+
+## Defining Errors Out of Existence
+- `parseCommandLine`: Blank inputs produce a zero-value `command{}` rather than returning errors.
+- `evalCommand`: Handles `cmd.name == ""` by no-oping with `actionContinue`, removing error-handling branches from the REPL loop.
+- `builtinType`: Returns `actionContinue` on empty arguments instead of panicking on index out of range.
+
+# Daniel Jackson Concept Design
+
+## Orthogonal Concepts
+- Tokenization: Pure data transformation (`string -> command{name, args}`).
+- Routing Policy: Evaluates token identifiers against registered capabilities (`evalCommand`).
+- Binary Resolution: Independent filesystem query on `$PATH` (`findExecutable`).
+- Process Execution: Low-level OS execution driver (`runExternal`).
+
+## Intermediate Representation (IR)
+- The `command` struct acts as the single contract between parser and evaluator, preventing parsing details from leaking into execution.
 
 # Idiomatic Go Patterns & Code Examples
 
@@ -209,31 +255,6 @@ func findExecutable(name string) (string, bool) {
 	}
 
 	return path, true
-}
-```
-
-## Eliminating Variable and Type Shadowing
-- Parameter naming uses distinct identifiers (`name string`, `target string`) rather than reusing the package type identifier (`command`).
-
-```go
-func builtinType(cmd command, ctx shellContext) flowAction {
-	if len(cmd.args) == 0 {
-		return actionContinue
-	}
-
-	target := cmd.args[0]
-	if _, ok := builtins[target]; ok {
-		fmt.Fprintf(ctx.stdout, typeBuiltinFmt, target)
-		return actionContinue
-	}
-
-	if path, ok := findExecutable(target); ok {
-		fmt.Fprintf(ctx.stdout, typeExecFmt, target, path)
-		return actionContinue
-	}
-
-	fmt.Fprintf(ctx.stdout, typeNotFoundFmt, target)
-	return actionContinue
 }
 ```
 
@@ -300,34 +321,6 @@ const (
 	actionExit
 )
 
-// shellContext encapsulates I/O streams to avoid global state dependencies.
-type shellContext struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-}
-
-// command represents a parsed shell invocation.
-type command struct {
-	name string
-	args []string
-}
-
-// parseCommandLine tokenizes a raw input line into a structured command.
-// Input: raw string from stdin (e.g., "echo foo bar").
-// Output: command struct containing the binary/builtin name and arguments.
-func parseCommandLine(line string) command {
-	parts := strings.Fields(line)
-	if len(parts) == 0 {
-		return command{}
-	}
-
-	return command{
-		name: parts[0],
-		args: parts[1:],
-	}
-}
-
 // findExecutable searches the PATH environment variable for a binary.
 // Input: binary name (e.g. "ls", "grep").
 // Output: absolute path if found, and a boolean indicating success.
@@ -367,7 +360,7 @@ func builtinType(cmd command, ctx shellContext) flowAction {
 	}
 
 	target := cmd.args[0]
-	if _, ok := builtins[target]; ok {
+	if ctx.isBuiltin(target) {
 		fmt.Fprintf(ctx.stdout, typeBuiltinFmt, target)
 		return actionContinue
 	}
@@ -379,17 +372,6 @@ func builtinType(cmd command, ctx shellContext) flowAction {
 
 	fmt.Fprintf(ctx.stdout, typeNotFoundFmt, target)
 	return actionContinue
-}
-
-// builtins acts as the single source of truth for builtin lookup and execution.
-var builtins map[string]builtinHandler
-
-func init() {
-	builtins = map[string]builtinHandler{
-		"echo": builtinEcho,
-		"exit": builtinExit,
-		"type": builtinType,
-	}
 }
 
 // runExternal executes external binaries by forwarding configured streams.
@@ -417,7 +399,7 @@ func evalCommand(cmd command, ctx shellContext) flowAction {
 		return actionContinue
 	}
 
-	if handler, ok := builtins[cmd.name]; ok {
+	if handler, ok := ctx.builtins[cmd.name]; ok {
 		return handler(cmd, ctx)
 	}
 
@@ -425,14 +407,55 @@ func evalCommand(cmd command, ctx shellContext) flowAction {
 	return actionContinue
 }
 
+// command represents a parsed shell invocation.
+type command struct {
+	name string
+	args []string
+}
+
+// parseCommandLine tokenizes a raw input line into a structured command.
+// Input: raw string from stdin (e.g., "echo foo bar").
+// Output: command struct containing the binary/builtin name and arguments.
+func parseCommandLine(line string) command {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return command{}
+	}
+
+	return command{
+		name: parts[0],
+		args: parts[1:],
+	}
+}
+
+// isBuiltin checks if a command name exists within the injected registry.
+func (ctx shellContext) isBuiltin(name string) bool {
+	_, ok := ctx.builtins[name]
+	return ok
+}
+
+// shellContext encapsulates I/O streams to avoid global state dependencies.
+type shellContext struct {
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+	// builtins acts as the single source of truth for builtin lookup and execution.
+	builtins map[string]builtinHandler
+}
+
 func main() {
 	ctx := shellContext{
 		stdin:  os.Stdin,
 		stdout: os.Stdout,
 		stderr: os.Stderr,
+		builtins: map[string]builtinHandler{
+			"echo": builtinEcho,
+			"exit": builtinExit,
+			"type": builtinType,
+		},
 	}
 
-	// Initialize reader once on fd 0 to preserve buffered stream state.
+	// Initialize reader once on fd 0 (Standard Input) to preserve buffered stream state (bytes already read from the underlying OS file descriptor via the read syscall).
 	reader := bufio.NewReader(ctx.stdin)
 	for {
 		fmt.Fprint(ctx.stdout, promptSymbol)
