@@ -98,7 +98,26 @@
 - Reader must be instantiated once at shell initialization to prevent dropped bytes across read cycles.
 
 # Jimmy Koppel Software Design Principles
-
+```text
+User Input: "echo hello"
+        |
+        v
+parseCommandLine() -> command{name: "echo", args: ["hello"]}
+        |
+        v
+evalCommand(cmd, ctx)
+        |
+        +---> ctx.builtins["echo"] -> builtinEcho(cmd, ctx)
+                                              |
+                                              v
+                                      returns actionContinue (0)
+                                              |
+                                              v
+main() receives actionContinue ---------------+
+        |
+        v
+[ action != actionExit ] --> loops to prompt '$ '
+```
 ## Single Source of Truth & Table-Driven Dispatch
 - Duplicated registrations cause Shotgun Surgery: adding a builtin previously required changing both a lookup set and a dispatch switch block.
 - Injected `builtins` registry provides a single authoritative mapping for both `type` queries (`ctx.isBuiltin`) and runtime evaluation (`ctx.builtins[cmd.name]`).
