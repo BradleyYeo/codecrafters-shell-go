@@ -17,8 +17,6 @@ func findExecutable(name string) (string, bool) {
 	return path, true
 }
 
-
-
 // runExternal executes external binaries by forwarding configured streams.
 // Input: structured command, shell execution context.
 // Output: None (runs process to completion).

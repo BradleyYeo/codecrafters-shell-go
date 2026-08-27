@@ -9,14 +9,19 @@ import (
 // builtinHandler defines the uniform interface for all builtin routines.
 type builtinHandler func(cmd command, ctx shellContext) flowAction
 
+// builtinCd changes the current working directory of the shell process.
+// Input: structured command, shell execution context.
+// Output: flowAction indicating continuation.
 func builtinCd(cmd command, ctx shellContext) flowAction {
-	if len(cmd.args) == 0{
-		return actionContinue
+
+	target := os.Getenv("HOME")
+	if len(cmd.args) > 0 && cmd.args[0] != "~" {
+		target = cmd.args[0]
 	}
-	target := cmd.args[0]
+
 	err := os.Chdir(target)
 	if err != nil {
-		fmt.Fprintf(ctx.stdout, typeDirNotFound, target);
+		fmt.Fprintf(ctx.stdout, cdNotFoundFmt, target)
 		return actionContinue
 	}
 

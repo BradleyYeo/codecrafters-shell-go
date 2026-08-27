@@ -14,7 +14,7 @@ const (
 	typeBuiltinFmt  = "%s is a shell builtin\n"
 	typeExecFmt     = "%s is %s\n"
 	typeNotFoundFmt = "%s: not found\n"
-	typeDirNotFound = "cd: %s: No such file or directory\n"
+	cdNotFoundFmt   = "cd: %s: No such file or directory\n"
 )
 
 // flowAction specifies the subsequent lifecycle step of the REPL loop.
@@ -87,7 +87,7 @@ func main() {
 			"exit": builtinExit,
 			"type": builtinType,
 			"pwd":  builtinPwd,
-			"cd": builtinCd,
+			"cd":   builtinCd,
 		},
 	}
 
