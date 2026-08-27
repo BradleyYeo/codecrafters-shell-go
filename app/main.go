@@ -40,6 +40,19 @@ func findExecutable(name string) (string, bool) {
 // builtinHandler defines the uniform interface for all builtin routines.
 type builtinHandler func(cmd command, ctx shellContext) flowAction
 
+// builtinPwd prints the current working directory to stdout.
+// Input: structured command, shell execution context.
+// Output: flowAction indicating continuation.
+func builtinPwd(cmd command, ctx shellContext) flowAction {
+	pwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(ctx.stderr, "Error getting pwd")
+		return actionContinue
+	}
+	fmt.Fprintln(ctx.stdout, pwd)
+	return actionContinue
+}
+
 // builtinEcho prints space-delimited arguments to stdout.
 // Input: structured command, shell execution context.
 // Output: flowAction indicating continuation.
@@ -156,6 +169,7 @@ func main() {
 			"echo": builtinEcho,
 			"exit": builtinExit,
 			"type": builtinType,
+			"pwd":  builtinPwd,
 		},
 	}
 
