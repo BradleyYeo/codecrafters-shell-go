@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -15,6 +14,7 @@ const (
 	typeBuiltinFmt  = "%s is a shell builtin\n"
 	typeExecFmt     = "%s is %s\n"
 	typeNotFoundFmt = "%s: not found\n"
+	typeDirNotFound = "cd: %s: No such file or directory\n"
 )
 
 // flowAction specifies the subsequent lifecycle step of the REPL loop.
@@ -24,89 +24,6 @@ const (
 	actionContinue flowAction = iota
 	actionExit
 )
-
-// findExecutable searches the PATH environment variable for a binary.
-// Input: binary name (e.g. "ls", "grep").
-// Output: absolute path if found, and a boolean indicating success.
-func findExecutable(name string) (string, bool) {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return "", false
-	}
-
-	return path, true
-}
-
-// builtinHandler defines the uniform interface for all builtin routines.
-type builtinHandler func(cmd command, ctx shellContext) flowAction
-
-// builtinPwd prints the current working directory to stdout.
-// Input: structured command, shell execution context.
-// Output: flowAction indicating continuation.
-func builtinPwd(cmd command, ctx shellContext) flowAction {
-	pwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(ctx.stderr, "Error getting pwd")
-		return actionContinue
-	}
-	fmt.Fprintln(ctx.stdout, pwd)
-	return actionContinue
-}
-
-// builtinEcho prints space-delimited arguments to stdout.
-// Input: structured command, shell execution context.
-// Output: flowAction indicating continuation.
-func builtinEcho(cmd command, ctx shellContext) flowAction {
-	fmt.Fprintln(ctx.stdout, strings.Join(cmd.args, " "))
-	return actionContinue
-}
-
-// builtinExit signals the shell REPL loop to terminate.
-// Input: structured command, shell execution context.
-// Output: flowAction indicating termination.
-func builtinExit(cmd command, ctx shellContext) flowAction {
-	return actionExit
-}
-
-// builtinType inspects if a target command is a shell builtin or PATH binary.
-// Input: structured command, shell execution context.
-// Output: flowAction indicating continuation.
-func builtinType(cmd command, ctx shellContext) flowAction {
-	if len(cmd.args) == 0 {
-		return actionContinue
-	}
-
-	target := cmd.args[0]
-	if ctx.isBuiltin(target) {
-		fmt.Fprintf(ctx.stdout, typeBuiltinFmt, target)
-		return actionContinue
-	}
-
-	if path, ok := findExecutable(target); ok {
-		fmt.Fprintf(ctx.stdout, typeExecFmt, target, path)
-		return actionContinue
-	}
-
-	fmt.Fprintf(ctx.stdout, typeNotFoundFmt, target)
-	return actionContinue
-}
-
-// runExternal executes external binaries by forwarding configured streams.
-// Input: structured command, shell execution context.
-// Output: None (runs process to completion).
-func runExternal(cmd command, ctx shellContext) {
-	if _, ok := findExecutable(cmd.name); !ok {
-		fmt.Fprintf(ctx.stdout, cmdNotFoundFmt, cmd.name)
-		return
-	}
-
-	proc := exec.Command(cmd.name, cmd.args...)
-	proc.Stdin = ctx.stdin
-	proc.Stdout = ctx.stdout
-	proc.Stderr = ctx.stderr
-
-	_ = proc.Run()
-}
 
 // evalCommand dispatches commands to registered builtins or the external driver.
 // Input: structured command, shell execution context.
@@ -170,6 +87,7 @@ func main() {
 			"exit": builtinExit,
 			"type": builtinType,
 			"pwd":  builtinPwd,
+			"cd": builtinCd,
 		},
 	}
 
