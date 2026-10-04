@@ -49,7 +49,7 @@ func tokenize(line string) []string {
 			current.WriteRune(r)
 		case stateNormal:
 			if r == singleQuote {
-				state = stateNormal
+				state = stateInSingleQuote
 				inToken = true
 				continue
 			}
