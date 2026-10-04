@@ -11,6 +11,7 @@ type parseState int
 const (
 	stateNormal parseState = iota
 	stateInSingleQuote
+	stateInDoubleQuote
 )
 
 const (
@@ -41,6 +42,11 @@ func tokenize(line string) []string {
 
 	for _, r := range line {
 		switch state {
+		case stateInDoubleQuote:
+			if r == doubleQuote {
+				state = stateNormal
+				continue
+			}
 		case stateInSingleQuote:
 			if r == singleQuote {
 				state = stateNormal
@@ -48,6 +54,11 @@ func tokenize(line string) []string {
 			}
 			current.WriteRune(r)
 		case stateNormal:
+			if r == doubleQuote {
+				state = stateInDoubleQuote
+				inToken = true
+				continue
+			}
 			if r == singleQuote {
 				state = stateInSingleQuote
 				inToken = true
