@@ -51,14 +51,14 @@ type command struct {
 // Input: raw string from stdin (e.g., "echo foo bar").
 // Output: command struct containing the binary/builtin name and arguments.
 func parseCommandLine(line string) command {
-	parts := strings.Fields(line)
-	if len(parts) == 0 {
+	tokens := tokenize(line)
+	if len(tokens) == 0 {
 		return command{}
 	}
 
 	return command{
-		name: parts[0],
-		args: parts[1:],
+		name: tokens[0],
+		args: tokens[1:],
 	}
 }
 

@@ -75,33 +75,52 @@ Kernel Space (argv array):
 - Reify parser states into an explicit enumeration type (`parseState`).
 - The lexer becomes a deterministic finite state machine (FSM).
 
+### Reification of Token Emission
+- The logic to flush an accumulated token exists at two distinct points: upon encountering unquoted whitespace and at end-of-line (EOF).
+- Duplicating the flush logic causes state drift and increases the defect surface as more states are added.
+- Reify token flushing into a single localized closure (`flush`) that handles token emission, buffer clearing, and state reset atomically.
+
 ### Avoiding Arrow Anti-Pattern
-- Avoid deeply nested `if/else` ladders by flattening character handling inside a linear scan.
-- Use a single loop over input runes with a top-level `switch` on state and character, leveraging early `continue`.
+- Avoid deeply nested `switch` inside `case` inside `switch` ladders.
+- Flatten character handling using top-level state partitioning with early `continue` guard clauses.
 
 ```text
-Arrow Anti-Pattern (Fragile, Nested):
-for i := 0; i < len(line); i++ {
-    if inQuote {
-        if line[i] == '\'' {
-            inQuote = false
-        } else {
-            buf.WriteByte(line[i])
-        }
-    } else {
-        if line[i] == ' ' {
+Arrow Anti-Pattern (Nested, Obscure):
+for _, r := range line {
+    switch state {
+    case stateNormal:
+        switch {
+        case r == '\'':
+            state = stateInSingleQuote
+            inToken = true
+        case unicode.IsSpace(r):
             ...
         }
     }
 }
 
-Flattened State Machine (Maintainable, Linear):
+Flattened State Dispatch (Linear, Flat):
 for _, r := range line {
     switch state {
-    case stateNormal:
-        // Handle transitions from normal state
     case stateInSingleQuote:
-        // Handle transitions from single quote state
+        if r == singleQuote {
+            state = stateNormal
+            continue
+        }
+        current.WriteRune(r)
+
+    case stateNormal:
+        if r == singleQuote {
+            state = stateInSingleQuote
+            inToken = true
+            continue
+        }
+        if unicode.IsSpace(r) {
+            flush()
+            continue
+        }
+        current.WriteRune(r)
+        inToken = true
     }
 }
 ```
@@ -118,7 +137,7 @@ for _, r := range line {
 
 ### Deep Modules
 - Interface: `tokenize(line string) []string`.
-- The interface is minimal (one input, one output).
+- The interface is minimal (one string input, one token slice output).
 - The implementation is deep: it encapsulates state transitions, rune iteration, whitespace boundary detection, and token accumulation without exposing internal buffers.
 
 ### Information Hiding
@@ -128,6 +147,24 @@ for _, r := range line {
 ### Defining Errors Out of Existence
 - What happens if a command line ends with an unclosed single quote (e.g. `echo 'unterminated`)?
 - Instead of throwing fatal panics or crashing the shell process, the lexer flushes the current buffer as the final argument and terminates cleanly.
+
+### Reducing Cognitive Clutter
+- Avoid speculative constants: Declaring `doubleQuote`, `backslash`, `spaceChar`, and `tabChar` before they are consumed increases cognitive load.
+- Ensure declared constants are actively consumed rather than bypassed with hardcoded character literals (`singleQuote` vs `'\''`).
+
+# Design Tradeoffs
+
+## Closure vs Standalone Function for Token Flushing
+- Option A: Private package function `flushToken(tokens *[]string, current *strings.Builder, inToken *bool)`.
+  - Tradeoff: Creates a shallow function with 3 pointer arguments, polluting package scope with lexer plumbing.
+- Option B: Scoped closure `flush := func() { ... }` inside `tokenize`.
+  - Tradeoff: Captures lexical variables directly by reference, keeps emission logic cohesive, and prevents accidental external state mutations.
+
+## Switch-Based FSM vs Object-Oriented State Pattern
+- Option A: State interface (`type State interface { handle(r rune) State }`) with distinct structs per state.
+  - Tradeoff: Introduces heap allocations and dynamic dispatch overhead for every character processed.
+- Option B: Value-based enum (`parseState`) inside a `switch`.
+  - Tradeoff: Zero allocations per character, optimal CPU cache locality, and clear visibility of all transitions in a single code block.
 
 # Extensible Design for Subsequent Stages
 
@@ -162,8 +199,8 @@ for _, r := range line {
                               Return to stateNormal
 ```
 
-## State Enumeration & Constants
-- Recurring parser values extracted into constants and enums to eliminate magic numbers and strings.
+## State Enumeration & Active Constants
+- Maintain only active states and constants to prevent dead-code friction.
 
 ```go
 type parseState int
@@ -171,18 +208,12 @@ type parseState int
 const (
 	stateNormal parseState = iota
 	stateInSingleQuote
-	// Future extensions:
+	// Extensible slots for future stages:
 	// stateInDoubleQuote
 	// stateEscape
 )
 
-const (
-	singleQuote = '\''
-	doubleQuote = '"'
-	backslash   = '\\'
-	spaceChar   = ' '
-	tabChar     = '\t'
-)
+const singleQuote = '\''
 ```
 
 ## Token Concatenation Mechanics
@@ -198,10 +229,10 @@ const (
 ```text
 Tracing `echo hello''world`:
 1. 'h', 'e', 'l', 'l', 'o' -> current = "hello", inToken = true
-2. '\'' in stateNormal      -> state = stateInSingleQuote, inToken = true
-3. '\'' in stateInSingleQuote -> state = stateNormal, inToken = true
+2. singleQuote in stateNormal -> state = stateInSingleQuote, inToken = true
+3. singleQuote in stateInSingleQuote -> state = stateNormal, inToken = true
 4. 'w', 'o', 'r', 'l', 'd' -> current = "helloworld", inToken = true
-5. EOF                      -> flush "helloworld" -> tokens = ["echo", "helloworld"]
+5. EOF -> flush() -> tokens = ["echo", "helloworld"]
 ```
 
 # Implementation Specification
@@ -224,52 +255,60 @@ const (
 	stateInSingleQuote
 )
 
+const singleQuote = '\''
+
 // tokenize parses a raw command line into semantic argument tokens.
-// Input: raw command string from standard input.
-// Output: slice of parsed arguments with quotes stripped and escaped/quoted spaces preserved.
+// Input: raw command string from standard input (e.g., "echo 'foo bar'").
+// Output: slice of parsed arguments with quotes stripped and spaces preserved.
 func tokenize(line string) []string {
 	var tokens []string
 	var current strings.Builder
+
 	state := stateNormal
 	inToken := false
 
-	for _, r := range line {
-		switch state {
-		case stateNormal:
-			switch {
-			case r == '\'':
-				state = stateInSingleQuote
-				inToken = true
-			case unicode.IsSpace(r):
-				if inToken {
-					tokens = append(tokens, current.String())
-					current.Reset()
-					inToken = false
-				}
-			default:
-				current.WriteRune(r)
-				inToken = true
-			}
-
-		case stateInSingleQuote:
-			if r == '\'' {
-				state = stateNormal
-				continue
-			}
-			current.WriteRune(r)
+	flush := func() {
+		if inToken {
+			tokens = append(tokens, current.String())
+			current.Reset()
+			inToken = false
 		}
 	}
 
-	if inToken {
-		tokens = append(tokens, current.String())
+	for _, r := range line {
+		switch state {
+		case stateInSingleQuote:
+			if r == singleQuote {
+				state = stateNormal
+				continue
+			}
+
+			current.WriteRune(r)
+
+		case stateNormal:
+			if r == singleQuote {
+				state = stateInSingleQuote
+				inToken = true
+				continue
+			}
+
+			if unicode.IsSpace(r) {
+				flush()
+				continue
+			}
+
+			current.WriteRune(r)
+			inToken = true
+		}
 	}
+
+	flush()
 
 	return tokens
 }
 ```
 
-## Module: [app/main.go](file:///Users/bradleyyeo/Documents/learn/go-learn/codecrafters-shell-go/app/main.go) Refactoring
-- Replace `strings.Fields(line)` inside `parseCommandLine` with `tokenize(line)`.
+## Module: [app/main.go](file:///Users/bradleyyeo/Documents/learn/go-learn/codecrafters-shell-go/app/main.go) Integration
 
 ```go
 // parseCommandLine tokenizes a raw input line into a structured command.
@@ -288,23 +327,12 @@ func parseCommandLine(line string) command {
 }
 ```
 
-# Test-Driven Verification
-
-## Test Cases in `app/parser_test.go`
-- Plain words: `echo hello world` -> `["echo", "hello", "world"]`
-- Whitespace preservation: `echo 'shell   hello'` -> `["echo", "shell   hello"]`
-- Adjacent quote concatenation: `echo 'hello''world'` -> `["echo", "helloworld"]`
-- Mixed unquoted and quoted concatenation: `echo hello''world` -> `["echo", "helloworld"]`
-- Empty single quotes: `echo ''` -> `["echo", ""]`
-- Executable argument containing spaces: `cat '/tmp/file name'` -> `["cat", "/tmp/file name"]`
-- Multiple spaces outside quotes: `echo   a    b` -> `["echo", "a", "b"]`
-- Leading and trailing whitespace: `  echo hello  ` -> `["echo", "hello"]`
-
 # Active Recall & Knowledge Verification
 
 ## Questions
 - Why does `execve(2)` fail when a shell passes raw quotes (e.g., `argv[1] = "'file name'"`), but succeeds with `argv[1] = "file name"`?
 - What distinguishes an empty string argument (`echo ''`) from whitespace between arguments (`echo   `) at the lexer level?
-- How does an explicit Finite State Machine prevent the Arrow Anti-Pattern compared to nested string replacement functions?
+- How does flattening the nested `switch` with early `continue` statements reduce cognitive load and prevent the Arrow Anti-Pattern?
+- Why is an inline closure (`flush`) preferred over a package-level helper function for token emission?
+- What performance and architectural advantages does an enum-based `switch` state machine have over an object-oriented state pattern in Go?
 - Why must single-quote stripping occur inside the Tokenizer concept rather than inside `builtinEcho` or `runExternal`?
-- How does the addition of `stateInDoubleQuote` in future stages fit into this architecture without modifying `main.go`?
